@@ -1,6 +1,3 @@
-Here’s a professional `README.md` for your `n8n_dag.py` DAG:
-
-````markdown
 # n8n ETL with Monitoring DAG
 
 This Airflow DAG triggers an **n8n workflow** via webhook, monitors its execution, and fetches logs. It is designed for **ETL pipelines** that require **automation, error handling, and monitoring** of n8n workflows.
@@ -16,7 +13,6 @@ This Airflow DAG triggers an **n8n workflow** via webhook, monitors its executio
 - [DAG Flow](#dag-flow)
 - [Tasks](#tasks)
 - [Usage](#usage)
-- [License](#license)
 
 ---
 
