@@ -1,0 +1,13 @@
+# Airflow
+logs/
+airflow.db
+*.pyc
+__pycache__/
+
+# Env
+.env
+venv/
+
+# OS
+.DS_Store
+Thumbs.db
