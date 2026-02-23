@@ -4,6 +4,75 @@ This DAG orchestrates Talend Cloud jobs by triggering executions and monitoring 
 
 It uses Airflow’s decorator API and polls Talend’s REST endpoints dynamically.
 
+
+---
+
+## **Main Idea**
+
+This Airflow DAG is designed to **orchestrate a Talend Cloud job dynamically**. It triggers a Talend job, monitors its execution in real time, and fetches **logs and component-level metrics** for observability. The goal is to automate the execution of a Talend job while keeping track of its status and performance for downstream processing or analysis.
+
+---
+
+## **Step-by-Step Explanation**
+
+1. **DAG Definition**
+
+* The DAG is named `"talend_cloud_job_dynamic"` and is scheduled to run **manually** (`schedule=None`) with no catchup.
+* It is tagged for clarity: `"talend"`, `"cloud"`, and `"etl"`.
+* Default retry settings are applied: **3 retries** with a **5-minute delay** in case of failures.
+
+---
+
+2. **`trigger_job` Task**
+
+* This task is responsible for **starting a Talend Cloud job** using the Talend API.
+* It retrieves Talend credentials and the host from an Airflow connection named `"talend_cloud"`.
+* Sends a POST request to Talend’s `/processing/executions` endpoint with the job ID (`executable_id`) in the payload.
+* If the job is successfully triggered, it captures the **execution ID** from the response. This ID is dynamic and will be used by the monitoring task to track the job.
+
+**Key point:** This task allows **dynamic orchestration**, as the returned execution ID is not static and can be passed to other tasks.
+
+---
+
+3. **`monitor_job` Task**
+
+* This task **monitors the Talend job in real time** using the execution ID returned by `trigger_job`.
+
+* Two main things happen here:
+
+  **a. Fetch Logs**
+
+  * Continuously polls the `/monitoring/executions/{execution_id}/logs` endpoint to get the latest logs.
+  * Logs include timestamps, severity, and messages, providing insight into the job's execution status.
+
+  **b. Fetch Component Metrics**
+
+  * Polls `/monitoring/observability/executions/{execution_id}/component` to get **component-level metrics**.
+  * Metrics include:
+
+    * Component name (`connector_label`)
+    * Execution duration (`component_execution_duration_milliseconds`)
+    * Number of rows processed (`component_connection_rows_total`)
+  * These metrics give **observability** into how each component of the Talend job is performing.
+
+* The task keeps polling until either the **timeout is reached** or the job finishes.
+
+* Collected logs and metrics are returned as a dictionary for **downstream tasks or storage**.
+
+---
+
+4. **DAG Flow**
+
+* The workflow is simple and linear:
+
+  1. **Trigger the Talend job** and get the execution ID.
+  2. **Monitor the job** using that execution ID to collect logs and metrics dynamically.
+
+**Summary:** This DAG acts as a **dynamic executor and observer** for Talend Cloud jobs, allowing Airflow to trigger jobs, monitor execution, and collect detailed metrics without manual intervention. It’s essentially an **automated ETL orchestration with built-in observability**.
+
+
+
+
 ## Configuration
 
 The DAG is defined with **default_args** and the `@dag` decorator to manage retries and scheduling.
