@@ -44,35 +44,76 @@ def talend_cloud_job_dag():
         return execution_id  # ← dynamic output
 
     @task()
-    def monitor_job(execution_id: str, poll_interval=10, timeout=30):
+    def monitor_job(execution_id: str, poll_interval=10, timeout=50):
         """
-        Monitor Talend Cloud job execution logs dynamically using the execution ID.
+        Monitor Talend Cloud job execution logs AND fetch component metrics dynamically
+        using the execution ID.
         """
+        # Get connection info from Airflow
         conn = BaseHook.get_connection("talend_cloud")
         headers = {"Authorization": f"Bearer {conn.password}"}
-        url = f"{conn.host}/monitoring/executions/{execution_id}/logs"
+
+        # URLs
+        logs_url = f"{conn.host}/monitoring/executions/{execution_id}/logs"
+        metrics_url = f"{conn.host}/monitoring/observability/executions/{execution_id}/component"
 
         start_time = time.time()
-        while True:
-            response = requests.get(url, headers=headers, params={"count": 50, "order": "DESC"})
-            if response.status_code != 200:
-                raise Exception(f"Failed fetching logs: {response.text}")
+        all_logs = []
+        all_metrics = []
 
-            logs = response.json().get("data", [])
+        while True:
+            # -----------------------------
+            # FETCH LOGS
+            # -----------------------------
+            log_resp = requests.get(logs_url, headers=headers, params={"count": 50, "order": "DESC"})
+            if log_resp.status_code != 200:
+                raise Exception(f"Failed fetching logs: {log_resp.text}")
+
+            logs = log_resp.json().get("data", [])
             if logs:
-                for log in logs[-30:]:  # print last 10 logs
+                all_logs.extend(logs)
+                print("\n[LOGS] Latest entries:")
+                for log in logs[-30:]:
                     ts = log.get("logTimestamp")
                     sev = log.get("severity")
                     msg = log.get("logMessage")
                     print(f"[{ts}] {sev}: {msg}")
 
+            # -----------------------------
+            # FETCH METRICS
+            # -----------------------------
+            metrics_resp = requests.get(metrics_url, headers=headers, params={"limit": 200, "offset": 0})
+            if metrics_resp.status_code == 200:
+                metrics_data = metrics_resp.json()
+                items = metrics_data.get("metrics", {}).get("items", [])
+                if items:
+                    all_metrics.extend(items)
+                    # Pretty print metrics table
+                    table = PrettyTable()
+                    table.field_names = ["Component", "Duration ms", "Rows Processed"]
+                    for item in items:
+                        table.add_row([
+                            item.get('connector_label', 'N/A'),
+                            item.get('component_execution_duration_milliseconds', 'N/A'),
+                            item.get('component_connection_rows_total', 'N/A')
+                        ])
+                    print("\n[METRICS] Component-level Observability:")
+                    print(table)
+            else:
+                print(f"Failed fetching metrics: {metrics_resp.text}")
+
+            # -----------------------------
             # Exit after timeout
+            # -----------------------------
             if time.time() - start_time > timeout:
                 print("Timeout reached, stopping monitoring.")
                 break
 
             time.sleep(poll_interval)
 
+        # Return collected data for downstream tasks
+        return {"logs": all_logs, "metrics": all_metrics}
+    
     # DAG flow: trigger -> monitor
     execution_id = trigger_job("69970ad40705b452419695c9")  # Pass the Talend job ID here
     monitor_job(execution_id)
