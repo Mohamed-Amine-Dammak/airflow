@@ -209,8 +209,5 @@ Airflow connections can be defined in a `connections.json` file and automaticall
 
 Then your Python sync script can read the value from environment variables instead of storing plaintext credentials.
 
-```
-
-
 #### 👤 Mohamed Amine Dammak, Engineering Student – Data Engineering & AI
 
