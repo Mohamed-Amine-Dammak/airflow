@@ -18,9 +18,8 @@ default_args = {
 def master_etl_pipeline():
 
     # 1️⃣ Trigger n8n DAG
-    trigger_n8n = TriggerDagRunOperator(
-        task_id="trigger_n8n_dag",
-        trigger_dag_id="n8n_etl_with_monitoring",
+    task1 = TriggerDagRunOperator(
+        task_id="trigger_n8n_dag", trigger_dag_id="n8n_etl_with_monitoring",
         wait_for_completion=True,
         poke_interval=10,
         allowed_states=["success"],
@@ -28,16 +27,15 @@ def master_etl_pipeline():
     )
 
     # 2️⃣ Trigger Talend DAG
-    trigger_talend = TriggerDagRunOperator(
-        task_id="trigger_talend_dag",
-        trigger_dag_id="talend_cloud_job_dynamic",
+    task2 = TriggerDagRunOperator(
+        task_id="trigger_talend_dag", trigger_dag_id="talend_cloud_job_dynamic",
         wait_for_completion=True,
         poke_interval=10,
         allowed_states=["success"],
         failed_states=["failed"],
     )
 
-    trigger_n8n >> trigger_talend
+    task1 >> task2
 
 
 dag = master_etl_pipeline()

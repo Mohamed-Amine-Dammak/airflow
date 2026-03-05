@@ -115,7 +115,21 @@ def talend_cloud_job_dag():
         return {"logs": all_logs, "metrics": all_metrics}
     
     # DAG flow: trigger -> monitor
-    execution_id = trigger_job("69970ad40705b452419695c9")  # Pass the Talend job ID here
-    monitor_job(execution_id)
+        # -------------------------
+    # JOB 1
+    # -------------------------
+    execution_id_1 = trigger_job("69970ad40705b452419695c9")
+    monitor_1 = monitor_job(execution_id_1)
+
+    # -------------------------
+    # JOB 2
+    # -------------------------
+    execution_id_2 = trigger_job("69a7fe83225ee7bab678992b")
+    monitor_2 = monitor_job(execution_id_2)
+
+    # -------------------------
+    # DEPENDENCY MANAGEMENT
+    # -------------------------
+    monitor_1 >> execution_id_2
 
 dag = talend_cloud_job_dag()

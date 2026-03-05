@@ -6,217 +6,203 @@ import requests
 import time
 import json
 
+
 default_args = {
     "retries": 3,
     "retry_delay": timedelta(minutes=5),
 }
 
+
 @dag(
-    dag_id="n8n_etl_with_monitoring",
+    dag_id="n8n_etl_multi_workflow_with_monitoring",
     start_date=datetime(2026, 2, 2),
-    schedule=None,
+    schedule=None,           # or "@daily", "0 3 * * *" etc.
     catchup=False,
     default_args=default_args,
     tags=["n8n", "ETL", "monitoring"],
 )
-def n8n_etl_with_monitoring():
+def n8n_multi_workflow_etl():
 
-    # 🔹 CHANGE THIS
-    WORKFLOW_ID = "PRmxjk46QLaxey2X"
-    WEBHOOK_PATH = "d4727c48-61aa-4d22-a785-725bc3eff140"
+    @task
+    def trigger_n8n_workflow(
+        workflow_id: str,
+        webhook_path: str,
+        file_name: str = "input.csv",
+        environment: str = "dev",
+        conn_id: str = "n8n_local"
+    ) -> dict:
+        """
+        Triggers an n8n webhook and returns basic trigger info.
+        """
+        conn = BaseHook.get_connection(conn_id)
+        webhook_url = f"{conn.host.rstrip('/')}/webhook-test/{webhook_path}"
 
-    @task()
-    def trigger_n8n(file_name="input.csv", environment="dev"):
-        conn = BaseHook.get_connection("n8n_local")
-        webhook_url = f"{conn.host}/webhook-test/{WEBHOOK_PATH}"
         headers = {"Authorization": f"Bearer {conn.password}"}
         params = {"file": file_name, "env": environment}
 
-        response = requests.get(webhook_url, headers=headers, params=params)
-        response.raise_for_status()
-        print("✅ n8n webhook triggered successfully")
+        try:
+            response = requests.get(webhook_url, headers=headers, params=params, timeout=10)
+            response.raise_for_status()
+            print(f"✅ Workflow {workflow_id} triggered successfully via webhook {webhook_path}")
+            return {
+                "workflow_id": workflow_id,
+                "webhook_path": webhook_path,
+                "triggered_at": datetime.utcnow().isoformat(),
+                "http_status": response.status_code
+            }
+        except requests.exceptions.RequestException as e:
+            raise AirflowException(f"Failed to trigger n8n workflow {workflow_id}: {str(e)}")
 
-    @task()
-    def monitor_n8n(trigger_result, poll_interval=5, timeout=120, max_attempts=5):
+
+    @task
+    def monitor_n8n_workflow(
+        trigger_result: dict,
+        poll_interval: int = 5,
+        timeout: int = 300,          # increased default timeout
+        max_attempts: int = 60,
+        conn_id: str = "n8n_local"
+    ) -> str:
         """
-        Monitors the most recent execution of the n8n workflow after it was triggered.
-        Uses workflowId filter + limit=1 for reliability.
-        Prints detailed execution logs including all available fields (even null/empty).
-        
-        Args:
-            trigger_result: Output from trigger_n8n task (ignored here)
-            poll_interval: Seconds between checks
-            timeout: Max total wait time in seconds
-            max_attempts: Safety max number of poll attempts (~60-75s with default interval)
-        
-        Returns:
-            str: Final execution status ('success', 'error', 'failed', etc.)
+        Monitors the latest execution of a specific n8n workflow.
+        Uses trigger_result only to know which workflow we're watching.
         """
-        conn = BaseHook.get_connection("n8n_local")
-        api_key = conn.password  # assuming password field holds X-N8N-API-KEY
-        
+        workflow_id = trigger_result["workflow_id"]
+
+        conn = BaseHook.get_connection(conn_id)
+        api_key = conn.password
+
         headers = {
             "X-N8N-API-KEY": api_key,
             "Accept": "application/json"
         }
 
-        # Use your actual workflow ID (hardcoded or from Airflow Variable / conn extra)
-        WORKFLOW_ID = "PRmxjk46QLaxey2X"  # ← change if needed, or pull from Variable
-
         executions_url = (
             f"{conn.host.rstrip('/')}/api/v1/executions"
-            f"?workflowId={WORKFLOW_ID}"
+            f"?workflowId={workflow_id}"
             f"&limit=1"
             f"&includeData=true"
         )
 
-        print("Waiting for n8n execution to become visible in API...")
+        print(f"→ Monitoring workflow {workflow_id} ...")
 
         start_time = time.time()
         attempt = 0
         latest_exec = None
-        exec_id = None
 
         while attempt < max_attempts and (time.time() - start_time) < timeout:
             attempt += 1
-            print(f"Attempt {attempt}/{max_attempts}... ", end="")
+            print(f"  attempt {attempt}/{max_attempts} ... ", end="")
 
             try:
-                resp = requests.get(executions_url, headers=headers, timeout=10)
+                resp = requests.get(executions_url, headers=headers, timeout=12)
                 resp.raise_for_status()
                 data = resp.json()
                 executions = data.get("data", [])
 
                 if executions:
                     latest_exec = executions[0]
-                    exec_id = latest_exec["id"]
                     status = latest_exec["status"]
-                    started = latest_exec.get("startedAt", "N/A")
-
-                    print(f"FOUND! ID = {exec_id} | Status = {status} | Started = {started}")
+                    print(f"FOUND → status = {status}")
                     break
                 else:
-                    print("not visible yet")
+                    print("still not visible")
 
             except requests.exceptions.RequestException as e:
-                print(f"Request error: {str(e)}")
+                print(f"request error: {str(e)}")
 
             time.sleep(poll_interval)
 
         if not latest_exec:
             raise AirflowException(
-                f"After {attempt} attempts (~{int(time.time() - start_time)}s), "
-                f"no execution found for workflow '{WORKFLOW_ID}'.\n"
-                f"Check n8n UI → Executions tab.\n"
-                f"Verify: workflow active? Correct WORKFLOW_ID? API key permissions?"
+                f"Could not find any recent execution for workflow {workflow_id} "
+                f"after {attempt} attempts (~{int(time.time()-start_time)}s)"
             )
 
-        # ────────────────────────────────────────────────
-        # Get detailed run data (already included, but fallback if partial)
-        # ────────────────────────────────────────────────
-        run_data = latest_exec.get("data", {}).get("resultData", {}).get("runData", {})
+        # ── Print nice summary + detailed logs ───────────────────────────────
+        _print_execution_details(latest_exec, workflow_id)
 
-        if not run_data:
-            print("⚠️ No runData found in list response → fetching single execution...")
-            detail_url = f"{conn.host.rstrip('/')}/api/v1/executions/{exec_id}?includeData=true"
-            try:
-                detail_resp = requests.get(detail_url, headers=headers, timeout=15)
-                detail_resp.raise_for_status()
-                full_exec = detail_resp.json()
-                run_data = full_exec.get("data", {}).get("resultData", {}).get("runData", {})
-            except Exception as e:
-                print(f"Failed to fetch detailed execution: {str(e)}")
+        final_status = latest_exec["status"]
 
-        # ────────────────────────────────────────────────
-        # Verbose detailed printing (all fields, nulls included)
-        # ────────────────────────────────────────────────
-        print("\n" + "=" * 60)
-        print("FULL N8N EXECUTION DETAILS & LOGS")
-        print("=" * 60)
+        if final_status in ["error", "failed", "crashed"]:
+            raise AirflowException(
+                f"n8n workflow {workflow_id} finished with bad status: {final_status}"
+            )
 
-        print(f"Execution ID       : {exec_id}")
-        print(f"Workflow ID        : {latest_exec.get('workflowId', 'N/A')}")
-        print(f"Status             : {latest_exec.get('status', 'N/A')}")
-        print(f"Mode               : {latest_exec.get('mode', 'N/A')}")
-        print(f"Started At         : {latest_exec.get('startedAt', 'N/A')}")
-        print(f"Stopped At         : {latest_exec.get('stoppedAt') or 'N/A'}")
-        print(f"Finished           : {latest_exec.get('finished', 'N/A')}")
-        print(f"Retry Of           : {latest_exec.get('retryOf') or 'None'}")
-        print(f"Custom Data        : {latest_exec.get('customData') or {}}")
-        print(f"Wait Till          : {latest_exec.get('waitTill') or 'N/A'}")
-        print("\n")
-
-        if not run_data:
-            print("⚠️ No node execution data available.")
-            print("   → Workflow may be empty, failed early, or data not captured.")
-        else:
-            print("NODE-BY-NODE DETAILS (including null/empty fields):")
-            print("-" * 60 + "\n")
-
-            for node_name, node_runs in run_data.items():
-                print(f"🔹 NODE: {node_name}")
-                print(f"   Total runs: {len(node_runs)}")
-
-                for run_idx, run in enumerate(node_runs, 1):
-                    print(f"   ├─ Run #{run_idx}")
-
-                    # Run metadata
-                    print(f"      Status          : {run.get('status') or 'N/A'}")
-                    print(f"      Execution Time  : {run.get('executionTime') or 'N/A'} ms")
-                    print(f"      Started         : {run.get('startedAt') or 'N/A'}")
-                    print(f"      Stopped         : {run.get('stoppedAt') or 'N/A'}")
-
-                    # Error block
-                    if run.get("error"):
-                        err = run["error"]
-                        print(f"      ❌ ERROR:")
-                        print(f"         Message     : {err.get('message') or 'No message'}")
-                        print(f"         Name        : {err.get('name') or 'N/A'}")
-                        print(f"         Description : {err.get('description') or 'N/A'}")
-                        print(f"         Stack       : {err.get('stack') or 'N/A'}")
-
-                    # Output data – full verbose dump
-                    if run.get("data"):
-                        output_data = run["data"]
-                        main_branches = output_data.get("main", [])
-
-                        print(f"      Output branches : {len(main_branches)}")
-
-                        for b_idx, branch in enumerate(main_branches, 1):
-                            print(f"         ├─ Branch {b_idx} ({len(branch)} items)")
-
-                            if not branch:
-                                print("            (empty)")
-                                continue
-
-                            for item_idx, item in enumerate(branch, 1):
-                                print(f"            ├─ Item {item_idx}")
-                                for key, value in item.items():
-                                    if value is None:
-                                        print(f"               {key:<14}: null")
-                                    elif isinstance(value, (dict, list)):
-                                        pretty = json.dumps(value, indent=2, ensure_ascii=False)
-                                        print(f"               {key:<14}:")
-                                        for line in pretty.splitlines():
-                                            print(f"                  {line}")
-                                    else:
-                                        print(f"               {key:<14}: {value}")
-                                print("")  # spacing
-                    else:
-                        print("      No output data")
-
-                    print("")  # run separator
-
-        print("\n" + "-" * 60)
-        print("Monitoring complete.")
-
-        final_status = latest_exec.get("status")
-        if final_status in ["error", "failed"]:
-            raise AirflowException(f"n8n workflow failed with status: {final_status}")
-
+        print(f"Workflow {workflow_id} completed → status = {final_status}")
         return final_status
-    # DAG flow
-    triggered = trigger_n8n()
-    monitor_n8n(triggered)
 
-dag = n8n_etl_with_monitoring()
+
+    def _print_execution_details(exec_data: dict, workflow_id: str):
+        """Helper - verbose printing of execution details"""
+        print("\n" + "═" * 70)
+        print(f"EXECUTION DETAILS — Workflow {workflow_id}")
+        print("═" * 70)
+
+        fields = [
+            ("ID", "id"),
+            ("Status", "status"),
+            ("Mode", "mode"),
+            ("Started", "startedAt"),
+            ("Stopped", "stoppedAt"),
+            ("Finished", "finished"),
+            ("Retry of", "retryOf"),
+        ]
+
+        for label, key in fields:
+            val = exec_data.get(key, "N/A")
+            if val is None:
+                val = "None"
+            print(f"{label:12} : {val}")
+
+        print("\nNode execution data:")
+        print("-" * 60)
+
+        run_data = exec_data.get("data", {}).get("resultData", {}).get("runData", {})
+
+        if not run_data:
+            print("No node run data available.")
+            return
+
+        for node_name, runs in run_data.items():
+            print(f"• {node_name}  (runs: {len(runs)})")
+            for i, run in enumerate(runs, 1):
+                print(f"  ├─ Run #{i:2}  status: {run.get('status','?')}")
+                if run.get("error"):
+                    err = run["error"]
+                    print(f"  │   ERROR: {err.get('message','<no message>')}")
+                if run.get("data", {}).get("main"):
+                    print(f"  │   → {len(run['data']['main'])} output branch(es)")
+
+        print("-" * 60 + "\n")
+
+
+
+    # Dag flow
+    # JOB 1
+    trigger_1 = trigger_n8n_workflow(
+        workflow_id="yjkqT3FaghsITMcJ",
+        webhook_path="d4727c48-61aa-4d22-a785-725bc3eff140",  # ← put real path
+        file_name="input.csv",
+        environment="dev"
+    )
+
+    monitor_1 = monitor_n8n_workflow(trigger_1)
+
+    # JOB 2
+    trigger_2 = trigger_n8n_workflow(
+        workflow_id="5BiWUHRn0FznS3ZA",
+        webhook_path="eb4766bb-6899-4dda-8557-b4a8114c1cf1",  # ← change
+        file_name="input.csv",
+        environment="dev"
+    )
+
+    monitor_2 = monitor_n8n_workflow(trigger_2)
+
+    # You can add more jobs the same way...
+    # JOB 3 → trigger_3 → monitor_3 ...
+
+    # Optional: enforce order if needed
+    monitor_1 >> trigger_2    # run job 2 only after job 1 succeeded
+
+
+n8n_multi_dag = n8n_multi_workflow_etl()
