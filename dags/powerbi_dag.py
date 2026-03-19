@@ -4,6 +4,7 @@ import requests
 from airflow.sdk import dag, task
 from airflow.exceptions import AirflowException
 from airflow.sdk.bases.hook import BaseHook
+from airflow.models import Variable
 
 
 default_args = {
@@ -137,8 +138,8 @@ def powerbi_dataset_refresh_template():
         )
 
     refresh_powerbi_dataset(
-        workspace_id="5992b264-2c31-4087-9f57-3b3baa1e7b0d",
-        dataset_id="b4350df9-bdcc-43fd-b458-1b1a4cb42831",
+        workspace_id=Variable.get("powerbi_workspaceID"),
+        dataset_id=Variable.get("powerbi_datasetID"),
         conn_id="powerbi_api",
     )
 

@@ -5,25 +5,26 @@ from datetime import datetime, timedelta, timezone
 import requests
 import time
 from utils.etl_tasks import custom_failure_email
+from airflow.models import Variable
 
 
 default_args = {
     "retries": 3,
     "retry_delay": timedelta(minutes=5),
-    "on_failure_callback": custom_failure_email(["amineelkpfe@gmail.com"]),
-    "on_retry_callback": custom_failure_email(["amineelkpfe@gmail.com"]),
+    "on_failure_callback": custom_failure_email(["your_email@example.com"]),
+    "on_retry_callback": custom_failure_email(["your_email@example.com"]),
 }
 
 
 @dag(
-    dag_id="n8n_etl_dynamic_workflow_name_with_monitoring",
+    dag_id="n8n_workflow_template",
     start_date=datetime(2026, 2, 2),
     schedule=None,
     catchup=False,
     default_args=default_args,
-    tags=["n8n", "ETL", "monitoring"],
+    tags=["n8n", "template", "orchestration"],
 )
-def n8n_multi_workflow_etl():
+def n8n_workflow_template():
 
     def _api_headers(api_key: str) -> dict:
         return {
@@ -57,10 +58,12 @@ def n8n_multi_workflow_etl():
             path = params.get("path")
 
             if isinstance(path, str) and path.strip():
-                results.append({
-                    "node_name": node.get("name"),
-                    "webhook_path": _normalize_path(path),
-                })
+                results.append(
+                    {
+                        "node_name": node.get("name"),
+                        "webhook_path": _normalize_path(path),
+                    }
+                )
 
         return results
 
@@ -114,6 +117,7 @@ def n8n_multi_workflow_etl():
     ) -> dict:
         """
         Resolve workflow name -> workflow_id + webhook_path dynamically.
+        Assumes one target workflow for this DAG template.
         """
         conn = BaseHook.get_connection(conn_id)
 
@@ -134,7 +138,7 @@ def n8n_multi_workflow_etl():
         if len(webhooks) > 1:
             raise AirflowException(
                 f"Workflow '{workflow_name}' (id={workflow_id}) has multiple webhook paths: "
-                f"{webhooks}. Add selection logic."
+                f"{webhooks}. Add selection logic for the correct webhook."
             )
 
         webhook_path = webhooks[0]["webhook_path"]
@@ -155,14 +159,21 @@ def n8n_multi_workflow_etl():
     @task
     def trigger_n8n_workflow(
         resolved: dict,
-        file_name: str = "input.csv",
-        environment: str = "dev",
+        query_params: dict | None = None,
+        request_body: dict | None = None,
+        http_method: str = "GET",
         conn_id: str = "n8n_local",
         use_test_webhook: bool = True,
         sleep_after: int = 10,
     ) -> dict:
         """
         Trigger n8n using the webhook path resolved from the workflow name.
+
+        Notes:
+        - query_params is optional.
+        - request_body is optional.
+        - Not all workflows need a file.
+        - If a workflow needs input.csv, pass it inside query_params or request_body.
         """
         conn = BaseHook.get_connection(conn_id)
         base_url = conn.host.rstrip("/")
@@ -174,17 +185,31 @@ def n8n_multi_workflow_etl():
         prefix = "webhook-test" if use_test_webhook else "webhook"
         webhook_url = f"{base_url}/{prefix}/{webhook_path}"
 
-        headers = {"Authorization": f"Bearer {conn.password}"}
-        params = {"file": file_name, "env": environment}
+        query_params = query_params or {}
+        request_body = request_body or {}
+        method = http_method.upper().strip()
 
         try:
-            response = requests.get(
-                webhook_url,
-                headers=headers,
-                params=params,
-                timeout=15,
-            )
+            if method == "GET":
+                response = requests.get(
+                    webhook_url,
+                    params=query_params,
+                    timeout=30,
+                )
+            elif method == "POST":
+                response = requests.post(
+                    webhook_url,
+                    params=query_params,
+                    json=request_body,
+                    timeout=30,
+                )
+            else:
+                raise AirflowException(
+                    f"Unsupported http_method='{http_method}'. Use GET or POST."
+                )
+
             response.raise_for_status()
+
         except requests.exceptions.RequestException as e:
             raise AirflowException(
                 f"Failed to trigger workflow_name='{workflow_name}' "
@@ -193,7 +218,8 @@ def n8n_multi_workflow_etl():
 
         print(
             f"Triggered workflow_name='{workflow_name}' "
-            f"(workflow_id={workflow_id}) via webhook_path='{webhook_path}'"
+            f"(workflow_id={workflow_id}) via webhook_path='{webhook_path}' "
+            f"using method={method}"
         )
 
         result = {
@@ -201,7 +227,10 @@ def n8n_multi_workflow_etl():
             "workflow_id": workflow_id,
             "webhook_path": webhook_path,
             "triggered_at": datetime.utcnow().isoformat(),
+            "http_method": method,
             "http_status": response.status_code,
+            "query_params": query_params,
+            "request_body": request_body,
             "response_text": response.text,
         }
 
@@ -403,41 +432,33 @@ def n8n_multi_workflow_etl():
 
         print("-" * 80 + "\n")
 
-    # JOB 1
-    resolved_1 = resolve_workflow(
-        "test_airflow",
+    # ---------------------------------------------------------------------
+    # TEMPLATE USAGE: ONE WORKFLOW
+    # ---------------------------------------------------------------------
+    workflow_name = Variable.get("n8n_workflow_name")
+    resolved = resolve_workflow(
+        workflow_name=workflow_name,
         sleep_after=10,
     )
-    trigger_1 = trigger_n8n_workflow(
-        resolved_1,
-        file_name="input.csv",
-        environment="dev",
+
+    triggered = trigger_n8n_workflow(
+        resolved=resolved,
+        http_method="GET",           # change to POST if needed by your workflow
+        query_params={
+            "env": "dev",
+            #"file": "input.csv",   # optional: only include if this workflow expects a file
+        },
+        request_body={
+            # optional JSON payload for POST workflows
+        },
         use_test_webhook=True,
         sleep_after=10,
     )
-    monitor_1 = monitor_n8n_workflow(
-        trigger_1,
+
+    monitor_n8n_workflow(
+        trigger_result=triggered,
         sleep_after=10,
     )
 
-    # JOB 2
-    resolved_2 = resolve_workflow(
-        "test_airflow_v1",
-        sleep_after=10,
-    )
-    trigger_2 = trigger_n8n_workflow(
-        resolved_2,
-        file_name="input.csv",
-        environment="dev",
-        use_test_webhook=True,
-        sleep_after=10,
-    )
-    monitor_2 = monitor_n8n_workflow(
-        trigger_2,
-        sleep_after=10,
-    )
 
-    monitor_1 >> trigger_2
-
-
-n8n_multi_dag = n8n_multi_workflow_etl()
+n8n_template_dag = n8n_workflow_template()
