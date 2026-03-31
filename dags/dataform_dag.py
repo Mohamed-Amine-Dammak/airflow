@@ -5,8 +5,10 @@ import json
 from google.oauth2 import service_account
 from google.auth.transport.requests import Request
 
+
+# time par default 15 min research if query gourmand if there is a risque in dataform 
 PROJECT_ID = "os-dpf-ariflow-prj-dev"
-REGION = "europe-west1"
+REGION = "europe-west1" #default
 REPOSITORY = "airflow-dataform"
 COMPILATION_ID = "9b22a514-c43e-4b07-b75d-f38d19ba0760"
 
