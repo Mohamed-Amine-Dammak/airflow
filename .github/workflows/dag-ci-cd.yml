@@ -67,16 +67,10 @@ jobs:
         run: |
           docker ps
 
-      - name: Airflow DAG list check in scheduler container
-        shell: powershell
-        run: |
-          docker exec airflowgitfresh-airflow-scheduler-1 airflow dags list
-
       - name: Airflow DAG import check in scheduler container
         shell: powershell
         run: |
           docker exec airflowgitfresh-airflow-scheduler-1 python -c "from airflow.models.dagbag import DagBag; dag_bag = DagBag(include_examples=False); import_errors = dag_bag.import_errors; import sys; print(f'Loaded DAGs successfully: {len(dag_bag.dags)}'); [print(f'\n- {file}\n{err}') for file, err in import_errors.items()]; sys.exit(1 if import_errors else 0)"
-
   cd:
     runs-on: ubuntu-latest
     needs: airflow-validate
