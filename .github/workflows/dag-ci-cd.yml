@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   ci:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Windows, X64]
 
     steps:
       - name: Checkout repository
@@ -25,37 +25,69 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
+        shell: powershell
         run: |
           python -m pip install --upgrade pip
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          if (Test-Path requirements.txt) { pip install -r requirements.txt }
           pip install ruff black pytest
 
       - name: Install Gitleaks
+        shell: powershell
         run: |
-          GITLEAKS_VERSION=8.24.2
-          wget -qO gitleaks.tar.gz "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
-          tar -xzf gitleaks.tar.gz
-          sudo mv gitleaks /usr/local/bin/gitleaks
+          $version = "8.24.2"
+          $zip = "$env:RUNNER_TEMP\gitleaks.zip"
+          $dir = "$env:RUNNER_TEMP\gitleaks"
+          Invoke-WebRequest -Uri "https://github.com/gitleaks/gitleaks/releases/download/v$version/gitleaks_${version}_windows_x64.zip" -OutFile $zip
+          Expand-Archive -Path $zip -DestinationPath $dir -Force
+          echo "$dir" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: List DAG Python files
-        run: find dags -type f -name "*.py" | sort
+        shell: powershell
+        run: |
+          Get-ChildItem -Path dags -Recurse -Filter *.py | ForEach-Object { $_.FullName }
 
       - name: Syntax check
-        run: python -m compileall -q dags
+        shell: powershell
+        run: |
+          python -m compileall -q dags
 
       - name: Lint check
-        run: ruff check dags || true
+        shell: powershell
+        run: |
+          ruff check dags
+        continue-on-error: true
 
       - name: Format check
-        run: black --check dags || true
+        shell: powershell
+        run: |
+          black --check dags
+        continue-on-error: true
 
       - name: Secret scan only DAGs
+        shell: powershell
         run: |
           gitleaks detect --source dags --no-git --verbose --redact
 
+      - name: Check Docker is running
+        shell: powershell
+        run: |
+          docker ps
+
+      - name: Airflow DAG list check in scheduler container
+        shell: powershell
+        run: |
+          docker exec airflowgitfresh-airflow-scheduler-1 airflow dags list
+
+      - name: Airflow DAG import check in scheduler container
+        shell: powershell
+        run: |
+          docker exec airflowgitfresh-airflow-scheduler-1 python -c 'from airflow.models.dagbag import DagBag; dag_bag = DagBag(include_examples=False); import_errors = dag_bag.import_errors; import sys; print(f"Loaded DAGs successfully: {len(dag_bag.dags)}"); [print(f"\n- {file}\n{err}") for file, err in import_errors.items()]; sys.exit(1 if import_errors else 0)'
+
   cd:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Windows, X64]
     needs: ci
     steps:
       - name: Fake deploy
-        run: echo "CD step reached"
+        shell: powershell
+        run: |
+          Write-Host "CD step reached"
