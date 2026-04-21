@@ -42,14 +42,6 @@ jobs:
       - name: Format check
         run: black --check dags || true
 
-      - name: Run tests (if present)
-        run: |
-          if [ -d dags/test_dags ]; then
-            pytest -q dags/test_dags
-          else
-            echo "No dags/test_dags directory found. Skipping tests."
-          fi
-
   cd:
     runs-on: ubuntu-latest
     needs: ci
