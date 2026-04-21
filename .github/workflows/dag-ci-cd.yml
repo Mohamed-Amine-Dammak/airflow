@@ -30,6 +30,13 @@ jobs:
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
           pip install ruff black pytest
 
+      - name: Install Gitleaks
+        run: |
+          GITLEAKS_VERSION=8.24.2
+          wget -qO gitleaks.tar.gz "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          tar -xzf gitleaks.tar.gz
+          sudo mv gitleaks /usr/local/bin/gitleaks
+
       - name: List DAG Python files
         run: find dags -type f -name "*.py" | sort
 
@@ -42,10 +49,9 @@ jobs:
       - name: Format check
         run: black --check dags || true
 
-      - name: Secret scan (Gitleaks)
-        uses: gitleaks/gitleaks-action@v2
-        with:
-          args: detect --source dags --verbose --redact
+      - name: Secret scan only DAGs
+        run: |
+          gitleaks detect --source dags --no-git --verbose --redact
 
   cd:
     runs-on: ubuntu-latest
