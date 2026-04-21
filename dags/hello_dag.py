@@ -12,6 +12,6 @@ with DAG(
 
     @task
     def say_hello():
-        print("Hello World from Airflow 3!")
+        print("Hello World from Airflow 3 bro!")
 
     say_hello()
