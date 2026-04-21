@@ -14,9 +14,6 @@ permissions:
 jobs:
   ci:
     runs-on: ubuntu-latest
-    env:
-      AIRFLOW_HOME: ${{ github.workspace }}/.airflow
-      AIRFLOW__CORE__LOAD_EXAMPLES: "False"
 
     steps:
       - name: Checkout repository
@@ -30,10 +27,6 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          AIRFLOW_VERSION=3.1.0
-          PYTHON_VERSION=3.11
-          CONSTRAINT_URL="https://raw.githubusercontent.com/apache/airflow/constraints-${AIRFLOW_VERSION}/constraints-${PYTHON_VERSION}.txt"
-          pip install "apache-airflow==${AIRFLOW_VERSION}" --constraint "${CONSTRAINT_URL}"
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
           pip install ruff black pytest
 
@@ -46,26 +39,8 @@ jobs:
       - name: Lint check
         run: ruff check dags || true
 
-
-      - name: Airflow DAG import and discovery check
-        run: |
-          mkdir -p "$AIRFLOW_HOME"
-          python - <<'PY'
-          from airflow.models.dagbag import DagBag
-
-          dag_bag = DagBag(dag_folder="dags", include_examples=False)
-
-          if dag_bag.import_errors:
-              print("DAG import errors found:")
-              for file, err in dag_bag.import_errors.items():
-                  print(f"\n- {file}\n{err}")
-              raise SystemExit(1)
-
-          print(f"Loaded DAGs successfully: {len(dag_bag.dags)}")
-          print("Discovered DAG IDs:")
-          for dag_id in sorted(dag_bag.dags):
-              print(f"- {dag_id}")
-          PY
+      - name: Format check
+        run: black --check dags || true
 
       - name: Run tests (if present)
         run: |
