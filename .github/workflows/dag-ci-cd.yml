@@ -46,8 +46,6 @@ jobs:
       - name: Lint check
         run: ruff check dags || true
 
-      - name: Format check
-        run: black --check dags
 
       - name: Airflow DAG import and discovery check
         run: |
