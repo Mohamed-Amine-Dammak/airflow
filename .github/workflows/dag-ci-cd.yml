@@ -1,0 +1,43 @@
+name: DAG CI/CD
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'dags/**'
+      - '.github/workflows/dag-ci-cd.yml'
+
+jobs:
+  ci:
+    name: Validate DAGs
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: List DAG files
+        run: |
+          echo "Changed repo checked out"
+          ls -R dags
+
+      - name: Basic Python syntax check
+        run: |
+          python -m py_compile dags/*.py
+
+  cd:
+    name: Test deploy
+    runs-on: ubuntu-latest
+    needs: ci
+
+    steps:
+      - name: Fake deploy step
+        run: |
+          echo "CI passed"
+          echo "Later this step can deploy or update your target"
