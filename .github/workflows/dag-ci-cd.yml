@@ -5,12 +5,19 @@ on:
     branches:
       - main
     paths:
-      - 'dags/**'
-      - '.github/workflows/dag-ci-cd.yml'
+      - "dags/**"
+      - ".github/workflows/dag-ci-cd.yml"
+
+permissions:
+  contents: read
 
 jobs:
   ci:
     runs-on: ubuntu-latest
+    env:
+      AIRFLOW_HOME: ${{ github.workspace }}/.airflow
+      AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -18,13 +25,57 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
-      - name: List DAG files
-        run: ls -R dags
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          AIRFLOW_VERSION=3.1.0
+          PYTHON_VERSION=3.11
+          CONSTRAINT_URL="https://raw.githubusercontent.com/apache/airflow/constraints-${AIRFLOW_VERSION}/constraints-${PYTHON_VERSION}.txt"
+          pip install "apache-airflow==${AIRFLOW_VERSION}" --constraint "${CONSTRAINT_URL}"
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          pip install ruff black pytest
 
-      - name: Basic Python syntax check
-        run: python -m py_compile dags/*.py
+      - name: List DAG Python files
+        run: find dags -type f -name "*.py" | sort
+
+      - name: Syntax check
+        run: python -m compileall -q dags
+
+      - name: Lint check
+        run: ruff check dags
+
+      - name: Format check
+        run: black --check dags
+
+      - name: Airflow DAG import and discovery check
+        run: |
+          mkdir -p "$AIRFLOW_HOME"
+          python - <<'PY'
+          from airflow.models.dagbag import DagBag
+
+          dag_bag = DagBag(dag_folder="dags", include_examples=False)
+
+          if dag_bag.import_errors:
+              print("DAG import errors found:")
+              for file, err in dag_bag.import_errors.items():
+                  print(f"\n- {file}\n{err}")
+              raise SystemExit(1)
+
+          print(f"Loaded DAGs successfully: {len(dag_bag.dags)}")
+          print("Discovered DAG IDs:")
+          for dag_id in sorted(dag_bag.dags):
+              print(f"- {dag_id}")
+          PY
+
+      - name: Run tests (if present)
+        run: |
+          if [ -d dags/test_dags ]; then
+            pytest -q dags/test_dags
+          else
+            echo "No dags/test_dags directory found. Skipping tests."
+          fi
 
   cd:
     runs-on: ubuntu-latest
